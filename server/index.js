@@ -130,9 +130,30 @@ function ensureSchema() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS tooltip_terms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL,
+      term TEXT NOT NULL,
+      term_key TEXT NOT NULL,
+      definition TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (board_id, term_key),
+      FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS global_tooltip_terms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT NOT NULL,
+      term_key TEXT NOT NULL UNIQUE,
+      definition TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_cards_board ON cards(board_id);
     CREATE INDEX IF NOT EXISTS idx_votes_card ON votes(card_id);
     CREATE INDEX IF NOT EXISTS idx_votes_status ON votes(status);
+    CREATE INDEX IF NOT EXISTS idx_tooltips_board ON tooltip_terms(board_id);
+    CREATE INDEX IF NOT EXISTS idx_global_tooltips_key ON global_tooltip_terms(term_key);
   `);
 
   const boardCount = db.prepare('SELECT COUNT(*) AS c FROM boards').get().c;
@@ -191,6 +212,41 @@ function ensureSchema() {
     ON CONFLICT(id) DO NOTHING
     `,
   ).run();
+
+  const globalTooltipCount = db.prepare('SELECT COUNT(*) AS c FROM global_tooltip_terms').get().c;
+  if (!globalTooltipCount) {
+    const legacyRows = db
+      .prepare(
+        `
+        SELECT term, term_key, definition
+        FROM tooltip_terms
+        ORDER BY term_key ASC, id ASC
+        `,
+      )
+      .all();
+
+    if (legacyRows.length > 0) {
+      const insertGlobal = db.prepare(
+        `
+        INSERT INTO global_tooltip_terms (term, term_key, definition)
+        VALUES (?, ?, ?)
+        `,
+      );
+      const seen = new Set();
+
+      legacyRows.forEach((row) => {
+        const key = String(row.term_key || '').trim().toLowerCase();
+        const term = String(row.term || '').trim();
+        const definition = String(row.definition || '').trim();
+        if (!key || !term || !definition || seen.has(key)) {
+          return;
+        }
+
+        seen.add(key);
+        insertGlobal.run(term, key, definition);
+      });
+    }
+  }
 }
 
 ensureSchema();
@@ -280,6 +336,41 @@ function getActiveBoard() {
   return db.prepare('SELECT * FROM boards WHERE is_active = 1 ORDER BY id DESC LIMIT 1').get();
 }
 
+function getGlobalTooltipTerms() {
+  return db
+    .prepare(
+      `
+      SELECT term, definition
+      FROM global_tooltip_terms
+      ORDER BY term_key ASC
+      `,
+    )
+    .all()
+    .map((row) => ({
+      term: String(row.term || ''),
+      definition: String(row.definition || ''),
+    }));
+}
+
+function replaceGlobalTooltipTerms(terms) {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM global_tooltip_terms').run();
+
+    const insert = db.prepare(
+      `
+      INSERT INTO global_tooltip_terms (term, term_key, definition)
+      VALUES (?, ?, ?)
+      `,
+    );
+
+    terms.forEach((entry) => {
+      insert.run(entry.term, entry.termKey, entry.definition);
+    });
+  });
+
+  tx();
+}
+
 function getCardsByBoard(boardId) {
   return db
     .prepare(
@@ -345,6 +436,7 @@ function getStatePayload() {
     return {
       board: null,
       cards: [],
+      tooltipTerms: getGlobalTooltipTerms(),
       players: totalPlayers,
       requiredMajority,
       activePlayerIds,
@@ -361,6 +453,7 @@ function getStatePayload() {
       selectionLimit: activeBoard.selection_limit,
     },
     cards,
+    tooltipTerms: getGlobalTooltipTerms(),
     players: totalPlayers,
     requiredMajority,
     activePlayerIds,
@@ -821,6 +914,64 @@ app.get('/api/admin/boards/:id/cards', requireAdmin, (req, res) => {
     }));
 
   res.json({ cards });
+});
+
+function normalizeTooltipTermsPayload(incoming) {
+  const entries = Array.isArray(incoming) ? incoming : null;
+  if (!entries) {
+    return null;
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const raw of entries) {
+    const term = String(raw?.term || '').trim();
+    const definition = String(raw?.definition || '').trim();
+    if (!term || !definition) {
+      continue;
+    }
+
+    const termKey = term.toLowerCase();
+    if (seen.has(termKey)) {
+      continue;
+    }
+
+    seen.add(termKey);
+    normalized.push({ term, termKey, definition });
+  }
+
+  return normalized;
+}
+
+app.get('/api/admin/tooltips', requireAdmin, (_req, res) => {
+  res.json({ terms: getGlobalTooltipTerms() });
+});
+
+app.put('/api/admin/tooltips', requireAdmin, (req, res) => {
+  const normalized = normalizeTooltipTermsPayload(req.body?.terms);
+  if (!normalized) {
+    res.status(400).json({ error: 'terms array is required.' });
+    return;
+  }
+
+  replaceGlobalTooltipTerms(normalized);
+  res.json({ terms: getGlobalTooltipTerms() });
+});
+
+// Legacy board-scoped routes retained for compatibility.
+app.get('/api/admin/boards/:id/tooltips', requireAdmin, (_req, res) => {
+  res.json({ terms: getGlobalTooltipTerms() });
+});
+
+app.put('/api/admin/boards/:id/tooltips', requireAdmin, (req, res) => {
+  const normalized = normalizeTooltipTermsPayload(req.body?.terms);
+  if (!normalized) {
+    res.status(400).json({ error: 'terms array is required.' });
+    return;
+  }
+
+  replaceGlobalTooltipTerms(normalized);
+  res.json({ terms: getGlobalTooltipTerms() });
 });
 
 app.patch('/api/admin/cards/:id', requireAdmin, (req, res) => {

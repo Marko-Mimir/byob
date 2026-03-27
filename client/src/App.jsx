@@ -35,12 +35,290 @@ function api(path, options = {}) {
   });
 }
 
-function applyWrap(text, marker) {
-  return `${marker}${text || 'text'}${marker}`;
+const MC_COLORS = {
+  '0': '#000000',
+  '1': '#0000aa',
+  '2': '#00aa00',
+  '3': '#00aaaa',
+  '4': '#aa0000',
+  '5': '#aa00aa',
+  '6': '#ffaa00',
+  '7': '#aaaaaa',
+  '8': '#555555',
+  '9': '#5555ff',
+  a: '#55ff55',
+  b: '#55ffff',
+  c: '#ff5555',
+  d: '#ff55ff',
+  e: '#ffff55',
+  f: '#ffffff',
+};
+
+const MC_FORMAT_CODES = new Set(['l', 'm', 'n', 'o', 'r']);
+
+function normalizeTooltipTerms(terms) {
+  const map = new Map();
+  (terms || []).forEach((entry) => {
+    const term = String(entry?.term || '').trim();
+    const definition = String(entry?.definition || '').trim();
+    if (!term || !definition) {
+      return;
+    }
+
+    map.set(term.toLowerCase(), {
+      term,
+      definition,
+    });
+  });
+  return map;
 }
 
-function applyColorWrap(text, color) {
-  return `<span style="color:${color}">${text || 'text'}</span>`;
+function formatStateToStyle(state) {
+  return {
+    color: state.color || undefined,
+    fontWeight: state.bold ? 700 : undefined,
+    fontStyle: state.italic ? 'italic' : undefined,
+    textDecoration: `${state.underline ? 'underline' : ''} ${state.strikethrough ? 'line-through' : ''}`.trim() || undefined,
+  };
+}
+
+function parseMinecraftText(content, tooltipMap, onTooltipEnter, onTooltipLeave, keyPrefix = 'mc') {
+  const text = String(content || '');
+  const nodes = [];
+  let keyIndex = 0;
+  let styleState = {
+    color: null,
+    bold: false,
+    italic: false,
+    underline: false,
+    strikethrough: false,
+  };
+  let buffer = '';
+
+  function pushText(runText) {
+    if (!runText) {
+      return;
+    }
+
+    nodes.push(
+      <span key={`${keyPrefix}-text-${keyIndex++}`} style={formatStateToStyle(styleState)}>
+        {runText}
+      </span>,
+    );
+  }
+
+  function flushBuffer() {
+    if (!buffer) {
+      return;
+    }
+    pushText(buffer);
+    buffer = '';
+  }
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (char === '\\' && next === '&') {
+      buffer += '&';
+      i += 1;
+      continue;
+    }
+
+    if (char === '&' && next) {
+      const code = next.toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(MC_COLORS, code) || MC_FORMAT_CODES.has(code)) {
+        flushBuffer();
+        if (Object.prototype.hasOwnProperty.call(MC_COLORS, code)) {
+          styleState = {
+            ...styleState,
+            color: MC_COLORS[code],
+          };
+        } else if (code === 'l') {
+          styleState = { ...styleState, bold: true };
+        } else if (code === 'm') {
+          styleState = { ...styleState, strikethrough: true };
+        } else if (code === 'n') {
+          styleState = { ...styleState, underline: true };
+        } else if (code === 'o') {
+          styleState = { ...styleState, italic: true };
+        } else if (code === 'r') {
+          styleState = {
+            color: null,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+          };
+        }
+        i += 1;
+        continue;
+      }
+    }
+
+    if (char === '[') {
+      const closeIndex = text.indexOf(']', i + 1);
+      if (closeIndex > i + 1) {
+        const tooltipKey = text.slice(i + 1, closeIndex).trim().toLowerCase();
+        const tooltip = tooltipMap.get(tooltipKey);
+        if (tooltip) {
+          flushBuffer();
+          nodes.push(
+            <span
+              key={`${keyPrefix}-term-${keyIndex++}`}
+              className="tooltip-term"
+              style={formatStateToStyle(styleState)}
+              onMouseEnter={(event) => onTooltipEnter(tooltip.term, event.currentTarget, event)}
+              onMouseLeave={onTooltipLeave}
+            >
+              {tooltip.term}
+            </span>,
+          );
+          i = closeIndex;
+          continue;
+        }
+      }
+    }
+
+    if (char === '\n') {
+      flushBuffer();
+      nodes.push(<br key={`${keyPrefix}-br-${keyIndex++}`} />);
+      continue;
+    }
+
+    buffer += char;
+  }
+
+  flushBuffer();
+  return nodes;
+}
+
+function TooltipRichText({ content, terms, className = '' }) {
+  const tooltipMap = useMemo(() => normalizeTooltipTerms(terms), [terms]);
+  const [tooltipStack, setTooltipStack] = useState([]);
+  const hideTimerRef = useRef(null);
+
+  function clearHideTimer() {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }
+
+  function scheduleHide() {
+    clearHideTimer();
+    hideTimerRef.current = setTimeout(() => {
+      setTooltipStack([]);
+      hideTimerRef.current = null;
+    }, 3000);
+  }
+
+  function keepOpen() {
+    clearHideTimer();
+  }
+
+  function getTooltipPosition(anchorRect, anchorPoint, stackIndex) {
+    const width = 320;
+    const margin = 12;
+    const verticalOffset = 2;
+    const stackOffset = 4;
+    const pointX = Number.isFinite(anchorPoint?.x) ? anchorPoint.x : anchorRect.left + anchorRect.width / 2;
+    const pointY = Number.isFinite(anchorPoint?.y) ? anchorPoint.y : anchorRect.bottom;
+
+    let left = pointX - width / 2;
+    let top = pointY + verticalOffset;
+
+    if (left + width + margin > window.innerWidth) {
+      left = window.innerWidth - width - margin;
+    }
+    if (left < margin) {
+      left = margin;
+    }
+
+    if (top + 220 > window.innerHeight) {
+      top = Math.max(margin, pointY - 220 - verticalOffset);
+    }
+
+    return {
+      left,
+      top: top + stackIndex * stackOffset,
+    };
+  }
+
+  function openTooltip(term, anchorElement, event) {
+    const normalizedTerm = String(term || '').trim().toLowerCase();
+    const tooltip = tooltipMap.get(normalizedTerm);
+    if (!tooltip || !anchorElement) {
+      return;
+    }
+
+    keepOpen();
+    const anchorRect = anchorElement.getBoundingClientRect();
+    const anchorPoint = {
+      x: Number.isFinite(event?.clientX) ? event.clientX : anchorRect.left + anchorRect.width / 2,
+      y: Number.isFinite(event?.clientY) ? event.clientY : anchorRect.bottom,
+    };
+
+    setTooltipStack((current) => {
+      const existingIndex = current.findIndex((entry) => entry.anchorElement === anchorElement);
+      if (existingIndex >= 0) {
+        return current.map((entry, index) => {
+          if (index !== existingIndex) {
+            return entry;
+          }
+
+          return {
+            ...entry,
+            anchorRect,
+            anchorPoint,
+          };
+        }).slice(0, existingIndex + 1);
+      }
+
+      return [
+        ...current,
+        {
+          id: `${normalizedTerm}-${Date.now()}-${Math.random()}`,
+          term: tooltip.term,
+          definition: tooltip.definition,
+          anchorElement,
+          anchorRect,
+          anchorPoint,
+        },
+      ];
+    });
+  }
+
+  useEffect(
+    () => () => {
+      clearHideTimer();
+    },
+    [],
+  );
+
+  return (
+    <div className={`tooltip-richtext ${className}`} onMouseEnter={keepOpen} onMouseLeave={scheduleHide}>
+      <div className="formatted-text">{parseMinecraftText(content, tooltipMap, openTooltip, scheduleHide, 'content')}</div>
+
+      {tooltipStack.map((tip, index) => {
+        const position = getTooltipPosition(tip.anchorRect, tip.anchorPoint, index);
+        return (
+          <aside
+            key={tip.id}
+            className="term-tooltip-card"
+            style={{ left: `${position.left}px`, top: `${position.top}px` }}
+            onMouseEnter={keepOpen}
+            onMouseLeave={scheduleHide}
+          >
+            <p className="term-tooltip-title">{tip.term}</p>
+            <div className="formatted-text tooltip-definition">
+              {parseMinecraftText(tip.definition, tooltipMap, openTooltip, scheduleHide, `tip-${tip.id}`)}
+            </div>
+          </aside>
+        );
+      })}
+    </div>
+  );
 }
 
 function Boot({ onFinish }) {
@@ -319,6 +597,7 @@ function PlayerView({ playerId }) {
         <FloatingCards
           playerId={playerId}
           cards={state.cards}
+          tooltipTerms={state.tooltipTerms || []}
           activeCardId={activeCardId}
           setActiveCardId={setActiveCardId}
           onSuggestVote={suggestVote}
@@ -341,12 +620,16 @@ function AdminView() {
   const [activePlayers, setActivePlayers] = useState({ count: 0, players: [], activeWindowMinutes: 0 });
   const [sessionState, setSessionState] = useState({ isPaused: false, message: 'Waiting for others' });
   const [pauseMessage, setPauseMessage] = useState('Waiting for others');
-  const [previewHtml, setPreviewHtml] = useState('');
-  const [isPreviewing, setIsPreviewing] = useState(false);
   const [managedCards, setManagedCards] = useState([]);
   const [editingCardId, setEditingCardId] = useState(null);
   const [editCard, setEditCard] = useState({ title: '', summary: '', content: '' });
   const [deleteBoardId, setDeleteBoardId] = useState('');
+  const [tooltipTerms, setTooltipTerms] = useState([]);
+  const [hasLoadedTooltipTerms, setHasLoadedTooltipTerms] = useState(false);
+  const [isTooltipEditorOpen, setIsTooltipEditorOpen] = useState(false);
+  const [tooltipDraft, setTooltipDraft] = useState([]);
+  const [isTooltipLoading, setIsTooltipLoading] = useState(false);
+  const [isTooltipSaving, setIsTooltipSaving] = useState(false);
 
   const [newBoard, setNewBoard] = useState({
     title: '',
@@ -380,6 +663,85 @@ function AdminView() {
 
     return () => clearInterval(poll);
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+    ensureTooltipTermsLoaded().catch(() => {});
+  }, [isAdmin]);
+
+  function sanitizeTooltipTerms(terms) {
+    const cleaned = [];
+    const seen = new Set();
+
+    (terms || []).forEach((entry) => {
+      const term = String(entry?.term || '').trim();
+      const definition = String(entry?.definition || '').trim();
+      if (!term || !definition) {
+        return;
+      }
+
+      const key = term.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      cleaned.push({ term, definition });
+    });
+
+    return cleaned;
+  }
+
+  async function ensureTooltipTermsLoaded() {
+    if (hasLoadedTooltipTerms) {
+      return tooltipTerms;
+    }
+
+    const payload = await api('/api/admin/tooltips');
+    const terms = sanitizeTooltipTerms(payload.terms || []);
+    setTooltipTerms(terms);
+    setHasLoadedTooltipTerms(true);
+    return terms;
+  }
+
+  async function openTooltipEditor() {
+    setIsTooltipEditorOpen(true);
+    setIsTooltipLoading(true);
+
+    try {
+      const terms = await ensureTooltipTermsLoaded();
+      setTooltipDraft(terms.length > 0 ? terms : [{ term: '', definition: '' }]);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+      setTooltipDraft([{ term: '', definition: '' }]);
+    } finally {
+      setIsTooltipLoading(false);
+    }
+  }
+
+  async function saveTooltipTerms() {
+    const terms = sanitizeTooltipTerms(tooltipDraft);
+    setIsTooltipSaving(true);
+    try {
+      const payload = await api('/api/admin/tooltips', {
+        method: 'PUT',
+        body: JSON.stringify({ terms }),
+      });
+      const normalized = sanitizeTooltipTerms(payload.terms || []);
+      setTooltipTerms(normalized);
+      setHasLoadedTooltipTerms(true);
+      setTooltipDraft(normalized.length > 0 ? normalized : [{ term: '', definition: '' }]);
+      setError('');
+      await api('/api/game-state').then(setState).catch(() => {});
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsTooltipSaving(false);
+    }
+  }
 
   async function checkAdminStatus() {
     try {
@@ -488,7 +850,6 @@ function AdminView() {
         summary: '',
         content: '',
       }));
-      setPreviewHtml('');
       await refreshAdminData();
       await api('/api/game-state').then(setState).catch(() => {});
     } catch (err) {
@@ -506,21 +867,6 @@ function AdminView() {
       await refreshAdminData();
     } catch (err) {
       setError(err.message);
-    }
-  }
-
-  async function requestPreview() {
-    try {
-      setIsPreviewing(true);
-      const payload = await api('/api/admin/preview', {
-        method: 'POST',
-        body: JSON.stringify({ content: newCard.content }),
-      });
-      setPreviewHtml(payload.html);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsPreviewing(false);
     }
   }
 
@@ -800,46 +1146,27 @@ function AdminView() {
                 </label>
 
                 <div className="editor-toolbar">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNewCard((current) => ({
-                        ...current,
-                        content: `${current.content}\n${applyWrap('bold text', '**')}`,
-                      }))
-                    }
-                  >
-                    Bold
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNewCard((current) => ({
-                        ...current,
-                        content: `${current.content}\n${applyWrap('italic text', '*')}`,
-                      }))
-                    }
-                  >
-                    Italic
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNewCard((current) => ({
-                        ...current,
-                        content: `${current.content}\n${applyColorWrap('colored text', '#00bcd4')}`,
-                      }))
-                    }
-                  >
-                    Color
-                  </button>
-                  <button type="button" onClick={requestPreview} disabled={isPreviewing}>
-                    {isPreviewing ? 'Rendering...' : 'Preview'}
+                  <button type="button" onClick={openTooltipEditor}>
+                    Edit Tooltip Terms
                   </button>
                 </div>
 
+                <details className="format-help">
+                  <summary className="kicker">Formatting Codes</summary>
+                  <p>
+                    Colors: &amp;0 black, &amp;1 dark_blue, &amp;2 dark_green, &amp;3 dark_aqua, &amp;4 dark_red,
+                    &amp;5 dark_purple, &amp;6 gold, &amp;7 gray, &amp;8 dark_gray, &amp;9 blue, &amp;a green,
+                    &amp;b aqua, &amp;c red, &amp;d light_purple, &amp;e yellow, &amp;f white.
+                  </p>
+                  <p>
+                    Styles: &amp;l bold, &amp;m strikethrough, &amp;n underline, &amp;o italic, &amp;r reset.
+                    Escape ampersand with \&amp;.
+                  </p>
+                  <p>Tooltip terms: wrap a known term in [brackets] to highlight it and show a definition.</p>
+                </details>
+
                 <label>
-                  Content (Markdown + safe color spans)
+                  Card Content
                   <textarea
                     value={newCard.content}
                     onChange={(event) => setNewCard((current) => ({ ...current, content: event.target.value }))}
@@ -852,10 +1179,14 @@ function AdminView() {
 
               <div className="preview-box">
                 <p className="kicker">Preview</p>
-                {previewHtml ? (
-                  <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                {newCard.content ? (
+                  <TooltipRichText
+                    content={newCard.content}
+                    terms={tooltipTerms}
+                    className="formatted-text-surface"
+                  />
                 ) : (
-                  <p>No preview yet. Click Preview.</p>
+                  <p>No preview yet. Start typing card content.</p>
                 )}
               </div>
 
@@ -968,6 +1299,83 @@ function AdminView() {
           </div>
         </section>
       )}
+
+      {isTooltipEditorOpen ? (
+        <div className="modal-scrim" onClick={() => setIsTooltipEditorOpen(false)}>
+          <section className="tooltip-editor-modal" onClick={(event) => event.stopPropagation()}>
+            <header className="tooltip-editor-header">
+              <h3>Tooltip Terms</h3>
+              <button type="button" onClick={() => setIsTooltipEditorOpen(false)}>
+                Close
+              </button>
+            </header>
+
+            <div className="tooltip-editor-scroll">
+              {isTooltipLoading ? <p>Loading terms...</p> : null}
+              {!isTooltipLoading
+                ? tooltipDraft.map((entry, index) => (
+                    <article key={`tooltip-row-${index}`} className="tooltip-editor-row">
+                      <label>
+                        Term
+                        <input
+                          value={entry.term}
+                          onChange={(event) =>
+                            setTooltipDraft((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, term: event.target.value } : item,
+                              ),
+                            )
+                          }
+                          placeholder="Arcane"
+                        />
+                      </label>
+                      <label>
+                        Definition
+                        <textarea
+                          rows={3}
+                          value={entry.definition}
+                          onChange={(event) =>
+                            setTooltipDraft((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, definition: event.target.value } : item,
+                              ),
+                            )
+                          }
+                          placeholder="May include [other terms] and & formatting codes"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() =>
+                          setTooltipDraft((current) =>
+                            current.length === 1
+                              ? [{ term: '', definition: '' }]
+                              : current.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </button>
+                    </article>
+                  ))
+                : null}
+            </div>
+
+            <div className="tooltip-editor-actions">
+              <button
+                type="button"
+                onClick={() => setTooltipDraft((current) => [...current, { term: '', definition: '' }])}
+              >
+                Add Term
+              </button>
+              <button type="button" onClick={saveTooltipTerms} disabled={isTooltipSaving || isTooltipLoading}>
+                {isTooltipSaving ? 'Saving...' : 'Save Terms'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -975,6 +1383,7 @@ function AdminView() {
 function FloatingCards({
   playerId,
   cards,
+  tooltipTerms,
   activeCardId,
   setActiveCardId,
   onSuggestVote,
@@ -1110,7 +1519,7 @@ function FloatingCards({
                   </div>
                 ) : null}
 
-                <div dangerouslySetInnerHTML={{ __html: card.renderedContent }} />
+                <TooltipRichText content={card.content} terms={tooltipTerms} className="formatted-text-surface" />
 
                 {!card.openVote && !card.selected ? (
                   <button

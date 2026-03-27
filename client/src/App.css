@@ -390,6 +390,49 @@ button:active {
   animation: fade-up 0.35s ease;
 }
 
+.formatted-text-surface {
+  border: 2px solid #000;
+  background: #101010;
+  color: #f2f2f2;
+  padding: 0.7rem;
+}
+
+.formatted-text {
+  color: inherit;
+  line-height: 1.35;
+}
+
+.tooltip-term {
+  color: #ff9f1c;
+  border-bottom: 1px dotted #ff9f1c;
+  cursor: help;
+  font-weight: 700;
+}
+
+.term-tooltip-card {
+  position: fixed;
+  z-index: 4000;
+  width: min(20rem, calc(100vw - 1.5rem));
+  background: #111;
+  color: #f0f0f0;
+  border: 2px solid #ff9f1c;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
+  padding: 0.55rem 0.65rem;
+}
+
+.term-tooltip-title {
+  margin: 0 0 0.35rem;
+  color: #ff9f1c;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tooltip-definition {
+  font-size: 0.92rem;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -580,6 +623,27 @@ button:active {
   border-radius: 0;
 }
 
+.format-help {
+  border: 2px solid #000;
+  background: #e8f7ff;
+  padding: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.format-help p {
+  margin: 0.35rem 0;
+  color: #000;
+}
+
+.format-help summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.format-help[open] summary {
+  margin-bottom: 0.35rem;
+}
+
 .pause-toggle {
   width: 100%;
   margin-top: 0.4rem;
@@ -601,8 +665,72 @@ button:active {
   border: 2px dashed #000;
   border-radius: 0;
   padding: 0.75rem;
-  background: #f5f5f5;
-  color: #000;
+  background: #161616;
+  color: #f5f5f5;
+}
+
+.preview-box .kicker {
+  color: #f5f5f5;
+}
+
+.preview-box p {
+  color: #f5f5f5;
+}
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 3500;
+  background: rgba(0, 0, 0, 0.58);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.tooltip-editor-modal {
+  width: min(54rem, calc(100vw - 1rem));
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+  background: #fff;
+  border: 2px solid #000;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.tooltip-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.tooltip-editor-header h3 {
+  margin: 0;
+}
+
+.tooltip-editor-scroll {
+  border: 2px solid #000;
+  padding: 0.55rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 12rem;
+  background: #f8f8f8;
+}
+
+.tooltip-editor-row {
+  border: 2px solid #000;
+  background: #fff;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tooltip-editor-actions {
+  display: flex;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .managed-card-list {
