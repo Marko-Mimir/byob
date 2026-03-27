@@ -21,3 +21,5 @@ Thumbs.db
 
 # Local runtime data
 data/byob.sqlite
+data/byob.sqlite-shm
+data/byob.sqlite-wal
