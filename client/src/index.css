@@ -14,9 +14,11 @@ html,
 body,
 #root {
   min-height: 100%;
+  background: #000;
 }
 
 body {
   margin: 0;
   font-family: var(--font-body);
+  overscroll-behavior-y: none;
 }

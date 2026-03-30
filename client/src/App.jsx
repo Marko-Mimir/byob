@@ -1391,7 +1391,21 @@ function FloatingCards({
   cardPositions,
   setCardPositions,
 }) {
+  const CARD_PLANE_PADDING = 24;
   const [dragState, setDragState] = useState(null);
+  const planeRef = useRef(null);
+
+  function clampWithinPlane(x, y, planeRect, cardRect) {
+    const minX = CARD_PLANE_PADDING;
+    const minY = CARD_PLANE_PADDING;
+    const maxX = Math.max(minX, planeRect.width - cardRect.width - CARD_PLANE_PADDING);
+    const maxY = Math.max(minY, planeRect.height - cardRect.height - CARD_PLANE_PADDING);
+
+    return {
+      x: Math.min(maxX, Math.max(minX, x)),
+      y: Math.min(maxY, Math.max(minY, y)),
+    };
+  }
 
   const topZ = useMemo(
     () =>
@@ -1413,19 +1427,31 @@ function FloatingCards({
           return null;
         }
 
-        const rect = document.querySelector('.cards-plane')?.getBoundingClientRect();
-        const nextX = event.clientX - (rect?.left || 0) - current.offsetX;
-        const nextY = event.clientY - (rect?.top || 0) - current.offsetY;
+        const planeRect = planeRef.current?.getBoundingClientRect();
+        if (!planeRect) {
+          return current;
+        }
+
+        const nextX = event.clientX - planeRect.left - current.offsetX;
+        const nextY = event.clientY - planeRect.top - current.offsetY;
         const card = document.querySelector(`[data-card-id="${current.cardId}"]`);
+
+        const bounded = card
+          ? clampWithinPlane(nextX, nextY, planeRect, card.getBoundingClientRect())
+          : {
+              x: nextX,
+              y: nextY,
+            };
+
         if (card) {
-          card.style.left = `${Math.max(0, nextX)}px`;
-          card.style.top = `${Math.max(0, nextY)}px`;
+          card.style.left = `${bounded.x}px`;
+          card.style.top = `${bounded.y}px`;
         }
 
         return {
           ...current,
-          x: Math.max(0, nextX),
-          y: Math.max(0, nextY),
+          x: bounded.x,
+          y: bounded.y,
         };
       });
     }
@@ -1461,8 +1487,55 @@ function FloatingCards({
     };
   }, [dragState, setActiveCardId, topZ]);
 
+  useEffect(() => {
+    const plane = planeRef.current;
+    if (!plane || cards.length === 0) {
+      return;
+    }
+
+    const planeRect = plane.getBoundingClientRect();
+    if (!planeRect.width || !planeRect.height) {
+      return;
+    }
+
+    const nextPositions = {};
+    let hasChanges = false;
+
+    cards.forEach((card) => {
+      const id = String(card.id);
+      const localPosition = cardPositions[id];
+      const sourceX = Number.isFinite(localPosition?.x) ? localPosition.x : card.x;
+      const sourceY = Number.isFinite(localPosition?.y) ? localPosition.y : card.y;
+      const sourceZ = localPosition?.zIndex ?? card.zIndex;
+      const cardElement = plane.querySelector(`[data-card-id="${card.id}"]`);
+
+      if (!cardElement) {
+        return;
+      }
+
+      const bounded = clampWithinPlane(sourceX, sourceY, planeRect, cardElement.getBoundingClientRect());
+      if (bounded.x !== sourceX || bounded.y !== sourceY) {
+        hasChanges = true;
+        nextPositions[id] = {
+          x: bounded.x,
+          y: bounded.y,
+          zIndex: sourceZ,
+        };
+      }
+    });
+
+    if (!hasChanges) {
+      return;
+    }
+
+    setCardPositions((current) => ({
+      ...current,
+      ...nextPositions,
+    }));
+  }, [activeCardId, cardPositions, cards, setCardPositions]);
+
   return (
-    <div className="cards-plane">
+    <div className="cards-plane" ref={planeRef}>
       {cards.map((card) => {
         const isActive = card.id === activeCardId;
         const voteTone = card.openVote ? 'card-vote' : card.selected ? 'card-selected' : '';

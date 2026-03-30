@@ -70,6 +70,7 @@
 
 .question-overlay.docking,
 .question-overlay.docked {
+  position: absolute;
   top: 6.2rem;
   transform: translate(-50%, 0) scale(0.62);
   z-index: 6;
@@ -299,9 +300,9 @@ button:active {
 }
 
 .cards-plane {
-  min-height: 70vh;
+  min-height: 132vh;
   position: relative;
-  padding: 0;
+  padding: 24px;
   margin: 0;
 }
 
